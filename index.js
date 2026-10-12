@@ -4,9 +4,6 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, downloadM
 // --- AYARLAR ---
 const TELEFON_NUMARANIZ = '905468429287'; 
 
-// Filtrelenecek kritik kelimeler
-const KELIMELER = ['arıza', 'bozuldu', 'çalışmıyor', 'bariyer', 'asansör', 'klima', 'elektrik', 'su kaçağı', 'jeneratör', 'lamba'];
-
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
@@ -27,13 +24,15 @@ async function baslat() {
     auth: state,
     printQRInTerminal: false,
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
-    defaultQueryTimeoutMs: 60000,
+    defaultQueryTimeoutMs: undefined, // 408 Zaman aşımı hatasını tamamen engeller
+    connectTimeoutMs: 60000,
     syncFullHistory: false,
     markOnlineOnConnect: false
   });
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Oturum yoksa eşleştirme kodu talep et
   if (!sock.authState.creds.registered) {
     console.log(`[BİLGİ] Oturum yok, ${TELEFON_NUMARANIZ} için eşleştirme kodu isteniyor...`);
     setTimeout(async () => {
@@ -64,6 +63,9 @@ async function baslat() {
             console.log(`✅ Hedef Grup Eşleşti: ${groups[jid].subject}`);
           }
         }
+        if (!hedefGrupJid) {
+          console.log(`⚠️ Dikkat: "${HEDEF_GRUP_ADI}" adında bir grup bulunamadı.`);
+        }
       } catch (e) {
         console.error('Grup listesi çekilirken hata:', e?.message || e);
       }
@@ -72,9 +74,9 @@ async function baslat() {
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error)?.output?.statusCode;
       const yenidenBaglan = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Bağlantı koptu (Kod: ${statusCode}). Yeniden bağlanılıyor...`);
+      console.log(`Bağlantı koptu (Kod: ${statusCode}). Yeniden başlatılıyor...`);
       if (yenidenBaglan) {
-        setTimeout(() => baslat(), 3000);
+        setTimeout(() => baslat(), 5000);
       }
     }
   });
@@ -85,7 +87,6 @@ async function baslat() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
-      // 1. Mesaj türünü ve metnini tespit et (Düz yazı veya Resim altı yazısı)
       const m = msg.message;
       const resimVar = Boolean(m.imageMessage);
       
@@ -96,7 +97,7 @@ async function baslat() {
 
       if (!metin && !resimVar) continue;
 
-     // Türkçe karakter ve ek duyarsız kontrol (arızalandı, ARIZALI, bozulmuş vb. hepsini yakalar)
+      // Türkçe karakter ve ek duyarsız kontrol (arızalandı, arızalı, bozuldu, çalışmıyor vb.)
       const kucuk = metin
         .toLocaleLowerCase('tr-TR')
         .replace(/ı/g, 'i')
@@ -109,11 +110,10 @@ async function baslat() {
       const TEMEL_KOKLER = ['ariz', 'bozuk', 'bozul', 'calismiyor', 'bariyer', 'asansor', 'klima', 'elektrik', 'kacag', 'jenerator', 'lamba'];
       const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
 
-      // Kritik kelime varsa ve hedef grubun kendisi değilse ilet
       if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         
-        // Türkiye yerel saati
+        // Türkiye yerel saati (UTC+3)
         const saat = new Date().toLocaleTimeString('tr-TR', { 
           timeZone: 'Europe/Istanbul', 
           hour: '2-digit', 
@@ -124,7 +124,6 @@ async function baslat() {
 
         try {
           if (resimVar) {
-            // Resmi WhatsApp sunucularından indirip gruba fırlat
             const buffer = await downloadMediaMessage(
               msg,
               'buffer',
@@ -138,7 +137,6 @@ async function baslat() {
             });
             console.log(`[Resimli Bildirim İletildi -> ${HEDEF_GRUP_ADI}]`);
           } else {
-            // Sadece metin mesajı ise
             await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
             console.log(`[Metin İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
           }
