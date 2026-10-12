@@ -1,5 +1,5 @@
 import http from 'http';
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, downloadMediaMessage } from '@whiskeysockets/baileys';
 
 // --- AYARLAR ---
 const TELEFON_NUMARANIZ = '905468429287'; 
@@ -27,17 +27,15 @@ async function baslat() {
     auth: state,
     printQRInTerminal: false,
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
-    defaultQueryTimeoutMs: 60000, // Zaman aşımı süresini 60 saniyeye çıkardık (408 hatasını engeller)
-    syncFullHistory: false,       // Geçmiş sohbetleri indirmeye çalışıp sunucuyu tıkamaz
+    defaultQueryTimeoutMs: 60000,
+    syncFullHistory: false,
     markOnlineOnConnect: false
   });
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Oturum yoksa eşleştirme kodu talep et
   if (!sock.authState.creds.registered) {
     console.log(`[BİLGİ] Oturum yok, ${TELEFON_NUMARANIZ} için eşleştirme kodu isteniyor...`);
-    
     setTimeout(async () => {
       try {
         const kod = await sock.requestPairingCode(TELEFON_NUMARANIZ);
@@ -57,8 +55,6 @@ async function baslat() {
 
     if (connection === 'open') {
       console.log('✅ WhatsApp Bağlantısı Başarılı!');
-      
-      // Grupları çekmeden önce 3 saniye bekle
       await delay(3000);
       try {
         const groups = await sock.groupFetchAllParticipating();
@@ -67,9 +63,6 @@ async function baslat() {
             hedefGrupJid = jid;
             console.log(`✅ Hedef Grup Eşleşti: ${groups[jid].subject}`);
           }
-        }
-        if (!hedefGrupJid) {
-          console.log(`⚠️ Dikkat: "${HEDEF_GRUP_ADI}" adında bir grup bulunamadı. Lütfen grup adını kontrol edin.`);
         }
       } catch (e) {
         console.error('Grup listesi çekilirken hata:', e?.message || e);
@@ -92,24 +85,55 @@ async function baslat() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
-      const metin = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-      if (!metin) continue;
+      // 1. Mesaj türünü ve metnini tespit et (Düz yazı veya Resim altı yazısı)
+      const m = msg.message;
+      const resimVar = Boolean(m.imageMessage);
+      
+      const metin = m.conversation || 
+                    m.extendedTextMessage?.text || 
+                    m.imageMessage?.caption || 
+                    '';
+
+      if (!metin && !resimVar) continue;
 
       const kucuk = metin.toLowerCase();
       const eslesti = KELIMELER.some(k => kucuk.includes(k));
 
-      // Kritik kelime varsa ve mesaj hedef grubun kendisinden gelmediyse ilet
+      // Kritik kelime varsa ve hedef grubun kendisi değilse ilet
       if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
-        const saat = new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
-
-        const bildirim = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n⏰ *Saat:* ${saat}\n👤 *Bildiren:* ${gonderen}\n💬 *Mesaj:* ${metin}`;
         
+        // Türkiye yerel saati
+        const saat = new Date().toLocaleTimeString('tr-TR', { 
+          timeZone: 'Europe/Istanbul', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+
+        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n⏰ *Saat:* ${saat}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${metin || '(Resimli Bildirim)'}`;
+
         try {
-          await sock.sendMessage(hedefGrupJid, { text: bildirim });
-          console.log(`[İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
+          if (resimVar) {
+            // Resmi WhatsApp sunucularından indirip gruba fırlat
+            const buffer = await downloadMediaMessage(
+              msg,
+              'buffer',
+              { },
+              { reuploadRequest: sock.updateMediaMessage }
+            );
+
+            await sock.sendMessage(hedefGrupJid, {
+              image: buffer,
+              caption: bildirimMetni
+            });
+            console.log(`[Resimli Bildirim İletildi -> ${HEDEF_GRUP_ADI}]`);
+          } else {
+            // Sadece metin mesajı ise
+            await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
+            console.log(`[Metin İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
+          }
         } catch (sendErr) {
-          console.error('Mesaj iletilirken hata:', sendErr);
+          console.error('Mesaj veya resim iletilirken hata:', sendErr);
         }
       }
     }
