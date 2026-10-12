@@ -2,7 +2,6 @@ import http from 'http';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay } from '@whiskeysockets/baileys';
 
 // --- AYARLAR ---
-// Numaranız: 905468429287
 const TELEFON_NUMARANIZ = '905468429287'; 
 
 // Filtrelenecek kritik kelimeler
@@ -27,7 +26,10 @@ async function baslat() {
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
-    browser: ['Ubuntu', 'Chrome', '20.0.04']
+    browser: ['Ubuntu', 'Chrome', '20.0.04'],
+    defaultQueryTimeoutMs: 60000, // Zaman aşımı süresini 60 saniyeye çıkardık (408 hatasını engeller)
+    syncFullHistory: false,       // Geçmiş sohbetleri indirmeye çalışıp sunucuyu tıkamaz
+    markOnlineOnConnect: false
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -36,7 +38,6 @@ async function baslat() {
   if (!sock.authState.creds.registered) {
     console.log(`[BİLGİ] Oturum yok, ${TELEFON_NUMARANIZ} için eşleştirme kodu isteniyor...`);
     
-    // Soket el sıkışmasını bekleyip talep gönder
     setTimeout(async () => {
       try {
         const kod = await sock.requestPairingCode(TELEFON_NUMARANIZ);
@@ -56,6 +57,9 @@ async function baslat() {
 
     if (connection === 'open') {
       console.log('✅ WhatsApp Bağlantısı Başarılı!');
+      
+      // Grupları çekmeden önce 3 saniye bekle
+      await delay(3000);
       try {
         const groups = await sock.groupFetchAllParticipating();
         for (const jid in groups) {
@@ -64,15 +68,21 @@ async function baslat() {
             console.log(`✅ Hedef Grup Eşleşti: ${groups[jid].subject}`);
           }
         }
+        if (!hedefGrupJid) {
+          console.log(`⚠️ Dikkat: "${HEDEF_GRUP_ADI}" adında bir grup bulunamadı. Lütfen grup adını kontrol edin.`);
+        }
       } catch (e) {
-        console.error('Grup listesi çekilemedi:', e);
+        console.error('Grup listesi çekilirken hata:', e?.message || e);
       }
     }
 
     if (connection === 'close') {
-      const yenidenBaglan = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Bağlantı koptu. Yeniden bağlanılıyor mu?:', yenidenBaglan);
-      if (yenidenBaglan) baslat();
+      const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+      const yenidenBaglan = statusCode !== DisconnectReason.loggedOut;
+      console.log(`Bağlantı koptu (Kod: ${statusCode}). Yeniden bağlanılıyor...`);
+      if (yenidenBaglan) {
+        setTimeout(() => baslat(), 3000);
+      }
     }
   });
 
@@ -95,8 +105,12 @@ async function baslat() {
 
         const bildirim = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n⏰ *Saat:* ${saat}\n👤 *Bildiren:* ${gonderen}\n💬 *Mesaj:* ${metin}`;
         
-        await sock.sendMessage(hedefGrupJid, { text: bildirim });
-        console.log(`[İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
+        try {
+          await sock.sendMessage(hedefGrupJid, { text: bildirim });
+          console.log(`[İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
+        } catch (sendErr) {
+          console.error('Mesaj iletilirken hata:', sendErr);
+        }
       }
     }
   });
