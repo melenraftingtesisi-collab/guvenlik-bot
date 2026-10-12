@@ -96,8 +96,18 @@ async function baslat() {
 
       if (!metin && !resimVar) continue;
 
-      const kucuk = metin.toLowerCase();
-      const eslesti = KELIMELER.some(k => kucuk.includes(k));
+     // Türkçe karakter ve ek duyarsız kontrol (arızalandı, ARIZALI, bozulmuş vb. hepsini yakalar)
+      const kucuk = metin
+        .toLocaleLowerCase('tr-TR')
+        .replace(/ı/g, 'i')
+        .replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u')
+        .replace(/ş/g, 's')
+        .replace(/ö/g, 'o')
+        .replace(/ç/g, 'c');
+
+      const TEMEL_KOKLER = ['ariz', 'bozuk', 'bozul', 'calismiyor', 'bariyer', 'asansor', 'klima', 'elektrik', 'kacag', 'jenerator', 'lamba'];
+      const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
 
       // Kritik kelime varsa ve hedef grubun kendisi değilse ilet
       if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
