@@ -101,7 +101,7 @@ async function baslat() {
       // Kritik kelime varsa ve mesaj hedef grubun kendisinden gelmediyse ilet
       if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
-        const saat = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+        const saat = new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
 
         const bildirim = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n⏰ *Saat:* ${saat}\n👤 *Bildiren:* ${gonderen}\n💬 *Mesaj:* ${metin}`;
         
