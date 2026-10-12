@@ -7,7 +7,7 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// 1. Port Dinleyici (Render Web Service kapanmasın diye)
+// 1. Port Dinleyici (Render Web Service zaman aşımını engeller)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -25,7 +25,7 @@ const TEMEL_KOKLER = [
   'calism',        // çalışmıyor, çalışmamaktadır, çalışmadı
   'acilmiy',       // açılmıyor, açılmamakta
   'kapanmiy',      // kapanmıyor, kapanmamakta
-  'tutmiy',        // tutmuyor (kilit vs.)
+  'tutmiy',        // tutmuyor (kilit vb.)
   'devre disi',    // devre dışı, devre dışıdır
 
   // Donanım, Cihaz ve Tesis Ekipmanları
@@ -45,7 +45,7 @@ const TEMEL_KOKLER = [
   'plaka tani',    // plaka tanıma sistemi
   'manyetik',      // manyetik kilit
   'kart okuyuc',   // kart okuyucu okumuyor
-  'buton',         // yangın/acil çıkış butonu
+  'buton',         // yangın / acil çıkış butonu
 
   // Altyapı ve Tesisat
   'elektrik',      // elektrikler gitti, kesildi
@@ -141,7 +141,15 @@ async function baslat() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
-      // WhatsApp'ın mesaj türlerini (normal, süreli, tek seferlik vb.) aç
+      const remoteJid = msg.key.remoteJid || '';
+
+      // 1. ÖZEL MESAJLARI ENGELLE: Mesaj grup sohbeti değilse (@g.us ile bitmiyorsa) dikkate alma
+      if (!remoteJid.endsWith('@g.us')) continue;
+
+      // 2. Mesaj hedef yönetim grubunun kendisinden geldiyse döngüye girmemesi için atla
+      if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
+
+      // WhatsApp mesaj sarmalayıcılarını (ephemeral, viewOnce vb.) aç
       let m = msg.message;
       if (m.ephemeralMessage) m = m.ephemeralMessage.message;
       if (m.viewOnceMessage) m = m.viewOnceMessage.message;
@@ -170,7 +178,7 @@ async function baslat() {
       const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
 
       // Filtre eşleştiğinde hedef yönetim grubuna yönlendir
-      if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
+      if (eslesti && hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         
         // Türkiye yerel saati (UTC+3)
