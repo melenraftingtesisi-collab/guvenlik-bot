@@ -1,24 +1,35 @@
+import http from 'http';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 
 // --- AYARLAR ---
 // Botu bağlayacağınız telefon numarası (Başında 90 ile, boşluksuz: örn: '905321234567')
-const TELEFON_NUMARANIZ = '905468429287'; 
+const TELEFON_NUMARANIZ = '905xxxxxxxxx'; 
 
 // Filtrelenecek kelimeler
 const KELIMELER = ['arıza', 'bozuldu', 'çalışmıyor', 'bariyer', 'asansör', 'klima', 'elektrik', 'su kaçağı', 'jeneratör', 'lamba'];
 // Hedef yönetim grubunuzun adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
+// 1. RENDER PORT DİNLİYİCİSİ (Zaman aşımını önleyen kısım)
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot aktif ve calisiyor!');
+}).listen(PORT, () => {
+  console.log(`Port dinleniyor: ${PORT}`);
+});
+
+// 2. WHATSAPP BOTU
 async function baslat() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_session');
   
   const sock = makeWASocket({
     auth: state,
-    printQRInTerminal: false // Karekodu kapattık
+    printQRInTerminal: false
   });
 
   // Eğer oturum yoksa ve telefon numarası girilmişse pairing code iste
-  if (!sock.authState.creds.registered && TELEFON_NUMARANIZ !== '905468429287') {
+  if (!sock.authState.creds.registered && TELEFON_NUMARANIZ !== '905xxxxxxxxx') {
     setTimeout(async () => {
       try {
         const code = await sock.requestPairingCode(TELEFON_NUMARANIZ);
