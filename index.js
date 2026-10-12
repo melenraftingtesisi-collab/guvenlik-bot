@@ -3,7 +3,7 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeys
 
 // --- AYARLAR ---
 // Botu bağlayacağınız telefon numarası (Başında 90 ile, boşluksuz: örn: '905321234567')
-const TELEFON_NUMARANIZ = '905xxxxxxxxx'; 
+const TELEFON_NUMARANIZ = '905468429287'; 
 
 // Filtrelenecek kelimeler
 const KELIMELER = ['arıza', 'bozuldu', 'çalışmıyor', 'bariyer', 'asansör', 'klima', 'elektrik', 'su kaçağı', 'jeneratör', 'lamba'];
@@ -29,7 +29,7 @@ async function baslat() {
   });
 
   // Eğer oturum yoksa ve telefon numarası girilmişse pairing code iste
-  if (!sock.authState.creds.registered && TELEFON_NUMARANIZ !== '905xxxxxxxxx') {
+  if (!sock.authState.creds.registered && TELEFON_NUMARANIZ !== '905468429287') {
     setTimeout(async () => {
       try {
         const code = await sock.requestPairingCode(TELEFON_NUMARANIZ);
