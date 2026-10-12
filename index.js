@@ -16,7 +16,62 @@ http.createServer((req, res) => {
   console.log(`Web portu dinleniyor: ${PORT}`);
 });
 
-// 2. WhatsApp Bot Başlatıcı
+// 2. KAPSAMLI FİLTRE LİSTESİ (Kök Bazlı ve Ek Duyarsız)
+const TEMEL_KOKLER = [
+  // Arıza / Çalışma Durumu
+  'ariz',          // arıza, arızalı, arızalandı, arızası
+  'bozuk',         // bozuk, bozuktur
+  'bozul',         // bozuldu, bozulmuş, bozuluyor
+  'calism',        // çalışmıyor, çalışmamaktadır, çalışmadı
+  'acilmiy',       // açılmıyor, açılmamakta
+  'kapanmiy',      // kapanmıyor, kapanmamakta
+  'tutmiy',        // tutmuyor (kilit vs.)
+  'devre disi',    // devre dışı, devre dışıdır
+
+  // Donanım, Cihaz ve Tesis Ekipmanları
+  'bariyer',       // bariyer arızası, bariyer kolu
+  'turnike',       // turnike kilitlendi
+  'asansor',       // asansör kaldı, arızalı
+  'klima',         // klima su akıtıyor, soğutmuyor
+  'jenerator',     // jeneratör devreye girmedi
+  'lamba',         // lamba yanmıyor, patlak
+  'aydinlatm',     // aydınlatma yetersiz, çalışmıyor
+  'projektor',     // projektör söndü
+  'kamera',        // kamera görüntüsü gitti, siyah ekran
+  'dvr', 'nvr',    // kayıt cihazı arızası
+  'xray', 'x-ray', // x-ray cihazı
+  'detektor',      // el detektörü, kapı detektörü
+  'telsiz',        // telsiz çekmiyor, şarj olmuyor
+  'plaka tani',    // plaka tanıma sistemi
+  'manyetik',      // manyetik kilit
+  'kart okuyuc',   // kart okuyucu okumuyor
+  'buton',         // yangın/acil çıkış butonu
+
+  // Altyapı ve Tesisat
+  'elektrik',      // elektrikler gitti, kesildi
+  'sigorta att',   // sigorta attı
+  'kacak', 'kacag',// su kaçağı, gaz kaçağı
+  'su basm',       // su basması, su bastı
+  'boru patla',    // boru patladı
+  'vana',          // vana arızası
+
+  // Fiziki Güvenlik ve Hasar
+  'kirik',         // cam kırık, kilit kırık
+  'kiril',         // kırıldı, kırılmış
+  'hasar',         // bariyer hasarlı, kapı hasar gördü
+  'carpma', 'carpt',// araç çarptı, bariyere çarptı
+  'zorlanm',       // kilit zorlanmış, kapı zorlandı
+  'delinm', 'kesilm',// tel çit kesilmiş, delinmiş
+  'tel cit',       // tel çit
+
+  // Acil Durum ve Yangın
+  'yangin',        // yangın ihbarı, alarmı
+  'duman',         // duman çıkıyor
+  'alarm cal',     // alarm çalıyor
+  'sabotaj'        // sabotaj uyarısı
+];
+
+// 3. WhatsApp Bot Başlatıcı
 async function baslat() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_session');
 
@@ -24,7 +79,7 @@ async function baslat() {
     auth: state,
     printQRInTerminal: false,
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
-    defaultQueryTimeoutMs: undefined, // 408 Zaman aşımı hatasını tamamen engeller
+    defaultQueryTimeoutMs: undefined,
     connectTimeoutMs: 60000,
     syncFullHistory: false,
     markOnlineOnConnect: false
@@ -32,7 +87,6 @@ async function baslat() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Oturum yoksa eşleştirme kodu talep et
   if (!sock.authState.creds.registered) {
     console.log(`[BİLGİ] Oturum yok, ${TELEFON_NUMARANIZ} için eşleştirme kodu isteniyor...`);
     setTimeout(async () => {
@@ -87,7 +141,13 @@ async function baslat() {
     for (const msg of messages) {
       if (!msg.message || msg.key.fromMe) continue;
 
-      const m = msg.message;
+      // WhatsApp'ın mesaj türlerini (normal, süreli, tek seferlik vb.) aç
+      let m = msg.message;
+      if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+      if (m.viewOnceMessage) m = m.viewOnceMessage.message;
+      if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+      if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
+
       const resimVar = Boolean(m.imageMessage);
       
       const metin = m.conversation || 
@@ -97,7 +157,7 @@ async function baslat() {
 
       if (!metin && !resimVar) continue;
 
-      // Türkçe karakter ve ek duyarsız kontrol (arızalandı, arızalı, bozuldu, çalışmıyor vb.)
+      // Türkçe karakterleri arama için sadeleştir
       const kucuk = metin
         .toLocaleLowerCase('tr-TR')
         .replace(/ı/g, 'i')
@@ -107,9 +167,9 @@ async function baslat() {
         .replace(/ö/g, 'o')
         .replace(/ç/g, 'c');
 
-      const TEMEL_KOKLER = ['ariz', 'bozuk', 'bozul', 'calismiyor', 'bariyer', 'asansor', 'klima', 'elektrik', 'kacag', 'jenerator', 'lamba'];
       const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
 
+      // Filtre eşleştiğinde hedef yönetim grubuna yönlendir
       if (eslesti && hedefGrupJid && msg.key.remoteJid !== hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         
@@ -124,10 +184,11 @@ async function baslat() {
 
         try {
           if (resimVar) {
+            console.log('[MEDYA] Resim indiriliyor...');
             const buffer = await downloadMediaMessage(
-              msg,
+              { key: msg.key, message: m },
               'buffer',
-              { },
+              {},
               { reuploadRequest: sock.updateMediaMessage }
             );
 
