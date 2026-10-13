@@ -11,10 +11,10 @@ const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
   "AYEDAŞ GM GÜVENLİK"
-  // Başka grup eklemek isterseniz virgülle tırnak içinde ekleyin
+  // İleride eklenecek grupları virgülle ekleyebilirsiniz
 ];
 
-// 1. Port Dinleyici
+// 1. Port Dinleyici (Render Web Service kapanmasın diye)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -74,7 +74,7 @@ async function baslat() {
   }
 
   let hedefGrupJid = null;
-  const dinlenenGrupJidleri = new Set();
+  const dinlenenGruplar = new Map(); // JID -> Grup Adı eşleşmesi
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
@@ -84,7 +84,7 @@ async function baslat() {
       await delay(3000);
       try {
         const groups = await sock.groupFetchAllParticipating();
-        dinlenenGrupJidleri.clear();
+        dinlenenGruplar.clear();
 
         for (const jid in groups) {
           const grupAdi = groups[jid].subject.trim();
@@ -97,7 +97,7 @@ async function baslat() {
 
           // Kaynak dinleme grupları tespiti
           if (KAYNAK_GRUPLAR.some(ad => ad.trim().toLowerCase() === grupAdi.toLowerCase())) {
-            dinlenenGrupJidleri.add(jid);
+            dinlenenGruplar.set(jid, grupAdi);
             console.log(`📡 Dinlemeye Alınan Grup: ${grupAdi}`);
           }
         }
@@ -128,10 +128,10 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. SADECE BELİRLENEN KAYNAK GRUPLARI DİNLE (Diğer tüm grupları ve özel mesajları eler)
-      if (!dinlenenGrupJidleri.has(remoteJid)) continue;
+      // 1. Sadece belirlenen kaynak grupları dinle
+      if (!dinlenenGruplar.has(remoteJid)) continue;
 
-      // 2. Hedef grubun kendisinden geldiyse engelle
+      // 2. Hedef grubun kendisinden gelenleri yutma
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
       // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, süreli vb.)
@@ -159,7 +159,7 @@ async function baslat() {
 
       if (!metin && !resimVar) continue;
 
-      // Türkçe harf sadeleştirme
+      // Türkçe karakter sadeleştirme
       const kucuk = metin
         .toLocaleLowerCase('tr-TR')
         .replace(/ı/g, 'i')
@@ -173,19 +173,27 @@ async function baslat() {
 
       if (eslesti && hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
+        const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
         
-        // Türkiye yerel saati
-        const saat = new Date().toLocaleTimeString('tr-TR', { 
+        // Türkiye yerel saati ve tarihi (GG.AA.YYYY)
+        const simdi = new Date();
+        const tarih = simdi.toLocaleDateString('tr-TR', {
+          timeZone: 'Europe/Istanbul',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        });
+        const saat = simdi.toLocaleTimeString('tr-TR', { 
           timeZone: 'Europe/Istanbul', 
           hour: '2-digit', 
           minute: '2-digit' 
         });
 
-        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n⏰ *Saat:* ${saat}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${metin || '(Resimli Bildirim)'}`;
+        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n📅 *Tarih:* ${tarih}\n⏰ *Saat:* ${saat}\n📍 *Grup:* ${kaynakGrupAdi}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${metin || '(Resimli Bildirim)'}`;
 
         try {
           if (resimVar) {
-            console.log('[MEDYA] Resimli bildirim indiriliyor...');
+            console.log(`[MEDYA] Resimli bildirim indiriliyor... (${kaynakGrupAdi})`);
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
