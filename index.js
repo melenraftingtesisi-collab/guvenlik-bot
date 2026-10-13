@@ -7,14 +7,13 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// SADECE DİNLENECEK KAYNAK GRUPLAR (Tam grup adlarını yazın)
+// SADECE DİNLENECEK KAYNAK GRUPLAR (Tam grup adları)
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
   "AYEDAŞ GM GÜVENLİK"
-  // İleride eklenecek grupları virgülle ekleyebilirsiniz
 ];
 
-// 1. Port Dinleyici (Render Web Service kapanmasın diye)
+// 1. Port Dinleyici
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -25,25 +24,15 @@ http.createServer((req, res) => {
 
 // 2. KAPSAMLI FİLTRE LİSTESİ
 const TEMEL_KOKLER = [
-  // Arıza / Çalışma Durumu
   'ariz', 'bozuk', 'bozul', 'calism', 'acilmiy', 'kapanmiy', 'tutmiy', 'devre disi', 'kesinti',
-
-  // Donanım, Cihaz ve Tesis Ekipmanları
   'bariyer', 'turnike', 'asansor', 'klima', 'jenerator', 'lamba', 'aydinlatm', 'projektor',
   'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektor', 'telsiz', 'plaka tani', 'manyetik',
   'kart okuyuc', 'buton', 'moba',
-
-  // Altyapı ve Tesisat
   'elektrik', 'sigorta', 'kacak', 'kacag', 'su basm', 'boru patla', 'vana', 'iski',
-
-  // Fiziki Güvenlik ve Hasar
   'kirik', 'kiril', 'hasar', 'carpma', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel cit',
-
-  // Acil Durum ve Yangın
   'yangin', 'duman', 'alarm cal', 'sabotaj'
 ];
 
-// 3. WhatsApp Bot Başlatıcı
 async function baslat() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_session');
 
@@ -74,7 +63,31 @@ async function baslat() {
   }
 
   let hedefGrupJid = null;
-  const dinlenenGruplar = new Map(); // JID -> Grup Adı eşleşmesi
+  const dinlenenGruplar = new Map();
+
+  async function gruplariGuncelle() {
+    try {
+      const groups = await sock.groupFetchAllParticipating();
+      dinlenenGruplar.clear();
+
+      for (const jid in groups) {
+        const grupAdi = groups[jid].subject.trim();
+
+        if (grupAdi.toLowerCase() === HEDEF_GRUP_ADI.trim().toLowerCase()) {
+          hedefGrupJid = jid;
+          console.log(`✅ Hedef Bildirim Grubu Bağlandı: ${grupAdi}`);
+        }
+
+        const eslesenKaynak = KAYNAK_GRUPLAR.find(ad => ad.trim().toLowerCase() === grupAdi.toLowerCase());
+        if (eslesenKaynak) {
+          dinlenenGruplar.set(jid, grupAdi);
+          console.log(`📡 Dinlemeye Alınan Grup: ${grupAdi} (${jid})`);
+        }
+      }
+    } catch (e) {
+      console.error('Grup listesi güncellenirken hata:', e?.message || e);
+    }
+  }
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
@@ -82,32 +95,7 @@ async function baslat() {
     if (connection === 'open') {
       console.log('✅ WhatsApp Bağlantısı Başarılı!');
       await delay(3000);
-      try {
-        const groups = await sock.groupFetchAllParticipating();
-        dinlenenGruplar.clear();
-
-        for (const jid in groups) {
-          const grupAdi = groups[jid].subject.trim();
-
-          // Hedef grup tespiti
-          if (grupAdi === HEDEF_GRUP_ADI.trim()) {
-            hedefGrupJid = jid;
-            console.log(`✅ Hedef Bildirim Grubu: ${grupAdi}`);
-          }
-
-          // Kaynak dinleme grupları tespiti
-          if (KAYNAK_GRUPLAR.some(ad => ad.trim().toLowerCase() === grupAdi.toLowerCase())) {
-            dinlenenGruplar.set(jid, grupAdi);
-            console.log(`📡 Dinlemeye Alınan Grup: ${grupAdi}`);
-          }
-        }
-
-        if (!hedefGrupJid) {
-          console.log(`⚠️ Dikkat: Hedef grup "${HEDEF_GRUP_ADI}" bulunamadı.`);
-        }
-      } catch (e) {
-        console.error('Grup listesi çekilirken hata:', e?.message || e);
-      }
+      await gruplariGuncelle();
     }
 
     if (connection === 'close') {
@@ -128,11 +116,22 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. Sadece belirlenen kaynak grupları dinle
-      if (!dinlenenGruplar.has(remoteJid)) continue;
+      // 🛑 KURAL 1: KESİNLİKLE ÖZEL MESAJLARI (DM) ENGELLE
+      // Mesaj bir grup mesajı değilse (@g.us ile bitmiyorsa) ANINDA ATLA
+      if (!remoteJid.endsWith('@g.us')) {
+        continue;
+      }
 
-      // 2. Hedef grubun kendisinden gelenleri yutma
-      if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
+      // 🛑 KURAL 2: HEDEF GRUBUN KENDİSİNİ ENGELLE
+      if (hedefGrupJid && remoteJid === hedefGrupJid) {
+        continue;
+      }
+
+      // 🛑 KURAL 3: SADECE BELİRLENEN KAYNAK GRUPLAR İŞLENSİN
+      // Eğer gelen grup dinlenen listede yoksa ATLA
+      if (!dinlenenGruplar.has(remoteJid)) {
+        continue;
+      }
 
       // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, süreli vb.)
       let m = msg.message;
@@ -175,7 +174,6 @@ async function baslat() {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
         
-        // Türkiye yerel saati ve tarihi (GG.AA.YYYY)
         const simdi = new Date();
         const tarih = simdi.toLocaleDateString('tr-TR', {
           timeZone: 'Europe/Istanbul',
@@ -193,7 +191,7 @@ async function baslat() {
 
         try {
           if (resimVar) {
-            console.log(`[MEDYA] Resimli bildirim indiriliyor... (${kaynakGrupAdi})`);
+            console.log(`[MEDYA] Resimli bildirim iletiliyor -> ${kaynakGrupAdi}`);
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
@@ -205,11 +203,10 @@ async function baslat() {
               image: buffer,
               caption: bildirimMetni
             });
-            console.log(`[Resimli Bildirim İletildi -> ${HEDEF_GRUP_ADI}]`);
           } else {
             await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
-            console.log(`[Metin İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
           }
+          console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen}`);
         } catch (sendErr) {
           console.error('Mesaj veya resim iletilirken hata:', sendErr);
         }
