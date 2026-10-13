@@ -7,7 +7,7 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// 1. Port Dinleyici (Render Web Service kapanmasın diye)
+// 1. Port Dinleyici
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -16,61 +16,24 @@ http.createServer((req, res) => {
   console.log(`Web portu dinleniyor: ${PORT}`);
 });
 
-// 2. KAPSAMLI FİLTRE LİSTESİ (Kök Bazlı ve Ek Duyarsız)
+// 2. KAPSAMLI FİLTRE LİSTESİ
 const TEMEL_KOKLER = [
   // Arıza / Çalışma Durumu
-  'ariz',          // arıza, arızalı, arızalandı, arızası
-  'bozuk',         // bozuk, bozuktur
-  'bozul',         // bozuldu, bozulmuş, bozuluyor
-  'calism',        // çalışmıyor, çalışmamaktadır, çalışmadı
-  'acilmiy',       // açılmıyor, açılmamakta
-  'kapanmiy',      // kapanmıyor, kapanmamakta
-  'tutmiy',        // tutmuyor (kilit vb.)
-  'devre disi',    // devre dışı, devre dışıdır
-  'kesinti',       // elektrik kesintisi, kesildi
+  'ariz', 'bozuk', 'bozul', 'calism', 'acilmiy', 'kapanmiy', 'tutmiy', 'devre disi', 'kesinti',
 
   // Donanım, Cihaz ve Tesis Ekipmanları
-  'bariyer',       // bariyer arızası, bariyer kolu
-  'turnike',       // turnike kilitlendi
-  'asansor',       // asansör kaldı, arızalı
-  'klima',         // klima su akıtıyor, soğutmuyor
-  'jenerator',     // jeneratör devreye girmedi
-  'lamba',         // lamba yanmıyor, patlak
-  'aydinlatm',     // aydınlatma yetersiz, çalışmıyor
-  'projektor',     // projektör söndü
-  'kamera',        // kamera görüntüsü gitti, siyah ekran
-  'dvr', 'nvr',    // kayıt cihazı arızası
-  'xray', 'x-ray', // x-ray cihazı
-  'detektor',      // el detektörü, kapı detektörü
-  'telsiz',        // telsiz çekmiyor, şarj olmuyor
-  'plaka tani',    // plaka tanıma sistemi
-  'manyetik',      // manyetik kilit
-  'kart okuyuc',   // kart okuyucu okumuyor
-  'buton',         // yangın / acil çıkış butonu
-  'moba',          // moba içi sigorta vb.
+  'bariyer', 'turnike', 'asansor', 'klima', 'jenerator', 'lamba', 'aydinlatm', 'projektor',
+  'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektor', 'telsiz', 'plaka tani', 'manyetik',
+  'kart okuyuc', 'buton', 'moba',
 
   // Altyapı ve Tesisat
-  'elektrik',      // elektrikler gitti, kesildi
-  'sigorta',       // sigorta attı, sigorta arızası
-  'kacak', 'kacag',// su kaçağı, gaz kaçağı
-  'su basm',       // su basması, su bastı
-  'boru patla',    // boru patladı
-  'vana',          // vana arızası
+  'elektrik', 'sigorta', 'kacak', 'kacag', 'su basm', 'boru patla', 'vana', 'iski',
 
   // Fiziki Güvenlik ve Hasar
-  'kirik',         // cam kırık, kilit kırık
-  'kiril',         // kırıldı, kırılmış
-  'hasar',         // bariyer hasarlı, kapı hasar gördü
-  'carpma', 'carpt',// araç çarptı, bariyere çarptı
-  'zorlanm',       // kilit zorlanmış, kapı zorlandı
-  'delinm', 'kesilm',// tel çit kesilmiş, delinmiş
-  'tel cit',       // tel çit
+  'kirik', 'kiril', 'hasar', 'carpma', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel cit',
 
   // Acil Durum ve Yangın
-  'yangin',        // yangın ihbarı, alarmı
-  'duman',         // duman çıkıyor
-  'alarm cal',     // alarm çalıyor
-  'sabotaj'        // sabotaj uyarısı
+  'yangin', 'duman', 'alarm cal', 'sabotaj'
 ];
 
 // 3. WhatsApp Bot Başlatıcı
@@ -145,14 +108,22 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. ÖZEL MESAJLARI ENGELLE: Sadece gruplardan gelenler (@g.us) işlensin
+      // Sadece gruplardan gelenler işlensin
       if (!remoteJid.endsWith('@g.us')) continue;
-
-      // 2. Hedef grubun kendisinden gelenleri yutma
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
-      // Mesaj kabuklarını (ephemeral, viewOnce, iletildi vb.) en derinine kadar soy
+      // 1. Düzenlenmiş (Editlenmiş) veya Sarmalanmış mesajları aç
       let m = msg.message;
+
+      // Düzenlenmiş mesaj kontrolü
+      if (m.editedMessage?.message) {
+        m = m.editedMessage.message;
+      }
+      if (m.protocolMessage?.editedMessage) {
+        m = m.protocolMessage.editedMessage;
+      }
+
+      // Sarmalayıcıları (viewOnce, ephemeral vb.) soy
       while (
         m.ephemeralMessage ||
         m.viewOnceMessage ||
@@ -162,19 +133,19 @@ async function baslat() {
         m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
       }
 
-      // Resmi tespit et
       const resimVar = Boolean(m.imageMessage);
       
-      // Metni tüm olası alanlardan topla (Normal yazı, Resim altı yazısı, vb.)
+      // Metni tüm olası alanlardan topla
       const metin = m.conversation || 
                     m.extendedTextMessage?.text || 
                     m.imageMessage?.caption || 
                     m.videoMessage?.caption || 
+                    m.documentMessage?.caption ||
                     '';
 
       if (!metin && !resimVar) continue;
 
-      // Metni normalize et (Türkçe karakterleri ve emojileri temizle)
+      // Türkçe harf sadeleştirme
       const kucuk = metin
         .toLocaleLowerCase('tr-TR')
         .replace(/ı/g, 'i')
@@ -189,7 +160,7 @@ async function baslat() {
       if (eslesti && hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         
-        // Türkiye yerel saati (UTC+3)
+        // Türkiye yerel saati
         const saat = new Date().toLocaleTimeString('tr-TR', { 
           timeZone: 'Europe/Istanbul', 
           hour: '2-digit', 
@@ -200,7 +171,7 @@ async function baslat() {
 
         try {
           if (resimVar) {
-            console.log('[MEDYA] Resimli arıza bildirimi tespit edildi, görsel indiriliyor...');
+            console.log('[MEDYA] Resimli/Düzenlenmiş bildirim indiriliyor...');
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
