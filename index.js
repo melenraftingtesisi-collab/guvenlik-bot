@@ -7,6 +7,13 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
+// SADECE DİNLENECEK KAYNAK GRUPLAR (Tam grup adlarını yazın)
+const KAYNAK_GRUPLAR = [
+  "AYEDAŞ BÖLGE GÜVENLİK",
+  "AYEDAŞ GM GÜVENLİK"
+  // Başka grup eklemek isterseniz virgülle tırnak içinde ekleyin
+];
+
 // 1. Port Dinleyici
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -67,6 +74,7 @@ async function baslat() {
   }
 
   let hedefGrupJid = null;
+  const dinlenenGrupJidleri = new Set();
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
@@ -76,14 +84,26 @@ async function baslat() {
       await delay(3000);
       try {
         const groups = await sock.groupFetchAllParticipating();
+        dinlenenGrupJidleri.clear();
+
         for (const jid in groups) {
-          if (groups[jid].subject.trim() === HEDEF_GRUP_ADI.trim()) {
+          const grupAdi = groups[jid].subject.trim();
+
+          // Hedef grup tespiti
+          if (grupAdi === HEDEF_GRUP_ADI.trim()) {
             hedefGrupJid = jid;
-            console.log(`✅ Hedef Grup Eşleşti: ${groups[jid].subject}`);
+            console.log(`✅ Hedef Bildirim Grubu: ${grupAdi}`);
+          }
+
+          // Kaynak dinleme grupları tespiti
+          if (KAYNAK_GRUPLAR.some(ad => ad.trim().toLowerCase() === grupAdi.toLowerCase())) {
+            dinlenenGrupJidleri.add(jid);
+            console.log(`📡 Dinlemeye Alınan Grup: ${grupAdi}`);
           }
         }
+
         if (!hedefGrupJid) {
-          console.log(`⚠️ Dikkat: "${HEDEF_GRUP_ADI}" adında bir grup bulunamadı.`);
+          console.log(`⚠️ Dikkat: Hedef grup "${HEDEF_GRUP_ADI}" bulunamadı.`);
         }
       } catch (e) {
         console.error('Grup listesi çekilirken hata:', e?.message || e);
@@ -108,22 +128,17 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // Sadece gruplardan gelenler işlensin
-      if (!remoteJid.endsWith('@g.us')) continue;
+      // 1. SADECE BELİRLENEN KAYNAK GRUPLARI DİNLE (Diğer tüm grupları ve özel mesajları eler)
+      if (!dinlenenGrupJidleri.has(remoteJid)) continue;
+
+      // 2. Hedef grubun kendisinden geldiyse engelle
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
-      // 1. Düzenlenmiş (Editlenmiş) veya Sarmalanmış mesajları aç
+      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, süreli vb.)
       let m = msg.message;
+      if (m.editedMessage?.message) m = m.editedMessage.message;
+      if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
 
-      // Düzenlenmiş mesaj kontrolü
-      if (m.editedMessage?.message) {
-        m = m.editedMessage.message;
-      }
-      if (m.protocolMessage?.editedMessage) {
-        m = m.protocolMessage.editedMessage;
-      }
-
-      // Sarmalayıcıları (viewOnce, ephemeral vb.) soy
       while (
         m.ephemeralMessage ||
         m.viewOnceMessage ||
@@ -135,7 +150,6 @@ async function baslat() {
 
       const resimVar = Boolean(m.imageMessage);
       
-      // Metni tüm olası alanlardan topla
       const metin = m.conversation || 
                     m.extendedTextMessage?.text || 
                     m.imageMessage?.caption || 
@@ -171,7 +185,7 @@ async function baslat() {
 
         try {
           if (resimVar) {
-            console.log('[MEDYA] Resimli/Düzenlenmiş bildirim indiriliyor...');
+            console.log('[MEDYA] Resimli bildirim indiriliyor...');
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
@@ -189,7 +203,7 @@ async function baslat() {
             console.log(`[Metin İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
           }
         } catch (sendErr) {
-          console.error('Mesaj veya resim iletilirken hata oluştu:', sendErr);
+          console.error('Mesaj veya resim iletilirken hata:', sendErr);
         }
       }
     }
