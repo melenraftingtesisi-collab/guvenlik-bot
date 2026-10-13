@@ -7,7 +7,7 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// 1. Port Dinleyici (Render Web Service zaman aşımını engeller)
+// 1. Port Dinleyici (Render Web Service kapanmasın diye)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -27,6 +27,7 @@ const TEMEL_KOKLER = [
   'kapanmiy',      // kapanmıyor, kapanmamakta
   'tutmiy',        // tutmuyor (kilit vb.)
   'devre disi',    // devre dışı, devre dışıdır
+  'kesinti',       // elektrik kesintisi, kesildi
 
   // Donanım, Cihaz ve Tesis Ekipmanları
   'bariyer',       // bariyer arızası, bariyer kolu
@@ -46,10 +47,11 @@ const TEMEL_KOKLER = [
   'manyetik',      // manyetik kilit
   'kart okuyuc',   // kart okuyucu okumuyor
   'buton',         // yangın / acil çıkış butonu
+  'moba',          // moba içi sigorta vb.
 
   // Altyapı ve Tesisat
   'elektrik',      // elektrikler gitti, kesildi
-  'sigorta att',   // sigorta attı
+  'sigorta',       // sigorta attı, sigorta arızası
   'kacak', 'kacag',// su kaçağı, gaz kaçağı
   'su basm',       // su basması, su bastı
   'boru patla',    // boru patladı
@@ -143,29 +145,36 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. ÖZEL MESAJLARI ENGELLE: Mesaj grup sohbeti değilse (@g.us ile bitmiyorsa) dikkate alma
+      // 1. ÖZEL MESAJLARI ENGELLE: Sadece gruplardan gelenler (@g.us) işlensin
       if (!remoteJid.endsWith('@g.us')) continue;
 
-      // 2. Mesaj hedef yönetim grubunun kendisinden geldiyse döngüye girmemesi için atla
+      // 2. Hedef grubun kendisinden gelenleri yutma
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
-      // WhatsApp mesaj sarmalayıcılarını (ephemeral, viewOnce vb.) aç
+      // Mesaj kabuklarını (ephemeral, viewOnce, iletildi vb.) en derinine kadar soy
       let m = msg.message;
-      if (m.ephemeralMessage) m = m.ephemeralMessage.message;
-      if (m.viewOnceMessage) m = m.viewOnceMessage.message;
-      if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
-      if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
+      while (
+        m.ephemeralMessage ||
+        m.viewOnceMessage ||
+        m.viewOnceMessageV2 ||
+        m.documentWithCaptionMessage
+      ) {
+        m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
+      }
 
+      // Resmi tespit et
       const resimVar = Boolean(m.imageMessage);
       
+      // Metni tüm olası alanlardan topla (Normal yazı, Resim altı yazısı, vb.)
       const metin = m.conversation || 
                     m.extendedTextMessage?.text || 
                     m.imageMessage?.caption || 
+                    m.videoMessage?.caption || 
                     '';
 
       if (!metin && !resimVar) continue;
 
-      // Türkçe karakterleri arama için sadeleştir
+      // Metni normalize et (Türkçe karakterleri ve emojileri temizle)
       const kucuk = metin
         .toLocaleLowerCase('tr-TR')
         .replace(/ı/g, 'i')
@@ -177,7 +186,6 @@ async function baslat() {
 
       const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
 
-      // Filtre eşleştiğinde hedef yönetim grubuna yönlendir
       if (eslesti && hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         
@@ -192,7 +200,7 @@ async function baslat() {
 
         try {
           if (resimVar) {
-            console.log('[MEDYA] Resim indiriliyor...');
+            console.log('[MEDYA] Resimli arıza bildirimi tespit edildi, görsel indiriliyor...');
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
@@ -210,7 +218,7 @@ async function baslat() {
             console.log(`[Metin İletildi -> ${HEDEF_GRUP_ADI}] ${metin}`);
           }
         } catch (sendErr) {
-          console.error('Mesaj veya resim iletilirken hata:', sendErr);
+          console.error('Mesaj veya resim iletilirken hata oluştu:', sendErr);
         }
       }
     }
