@@ -13,7 +13,7 @@ const KAYNAK_GRUPLAR = [
   "AYEDAŞ GM GÜVENLİK"
 ];
 
-// 1. Port Dinleyici
+// 1. Port Dinleyici (Render Web Service kapanmasın diye)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -22,15 +22,26 @@ http.createServer((req, res) => {
   console.log(`Web portu dinleniyor: ${PORT}`);
 });
 
-// 2. KAPSAMLI FİLTRE LİSTESİ
+// 2. KAPSAMLI FİLTRE LİSTESİ (Doğal Türkçe + Sadeleştirilmiş Halleri)
 const TEMEL_KOKLER = [
-  'ariz', 'bozuk', 'bozul', 'calism', 'acilmiy', 'kapanmiy', 'tutmiy', 'devre disi', 'kesinti',
-  'bariyer', 'turnike', 'asansor', 'klima', 'jenerator', 'lamba', 'aydinlatm', 'projektor',
-  'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektor', 'telsiz', 'plaka tani', 'manyetik',
+  // Arıza / Çalışma Durumu
+  'arız', 'ariz', 'bozuk', 'bozul', 'çalışm', 'calism', 'açılmıy', 'acilmiy', 'kapanmıy', 'kapanmiy', 'tutmuy', 'tutmiy', 'devre dışı', 'devre disi', 'kesinti',
+
+  // Donanım, Cihaz ve Tesis Ekipmanları
+  'bariyer', 'turnike', 'asansör', 'asansor', 'klima', 'jeneratör', 'jenerator', 'lamba', 'aydınlatm', 'aydinlatm', 'projektör', 'projektor',
+  'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektör', 'detektor', 'telsiz', 'plaka tanı', 'plaka tani', 'manyetik',
   'kart okuyuc', 'buton', 'moba',
-  'elektrik', 'sigorta', 'kacak', 'kacag', 'su basm', 'boru patla', 'vana', 'iski',
-  'kirik', 'kiril', 'hasar', 'carpma', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel cit',
-  'yangin', 'duman', 'alarm cal', 'sabotaj'
+
+  // Altyapı, Tesisat ve Sıhhi Sorunlar
+  'elektrik', 'sigorta', 'kaçak', 'kacak', 'su basm', 'boru patla', 'vana', 'iski',
+  'tıkan', 'tikan', 'taş', 'tas', 'akıt', 'akit', 'akıntı', 'akinti', 'damlat', 'sızıntı', 'sizinti',
+
+  // Fiziki Güvenlik, Hat ve Hasar
+  'kırık', 'kirik', 'kırıl', 'kiril', 'hasar', 'çarpma', 'carpma', 'çarpt', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel çit', 'tel cit',
+  'kop', 'koptu', 'kopma', 'devril', 'devrildi', 'devrilme', 'sark', 'sarktı', 'sarkma', 'yıkıl', 'yikil', 'yıkıldı',
+
+  // Acil Durum ve Yangın
+  'yangın', 'yangin', 'duman', 'alarm çal', 'alarm cal', 'sabotaj'
 ];
 
 async function baslat() {
@@ -64,6 +75,9 @@ async function baslat() {
 
   let hedefGrupJid = null;
   const dinlenenGruplar = new Map();
+
+  // Çoklu fotoğraf/video (albüm) takibi: Son bildirimi yapan kişiyi 120 sn boyunca aktif tutar
+  const aktifMedyaOlaylari = new Map();
 
   async function gruplariGuncelle() {
     try {
@@ -116,24 +130,16 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 🛑 KURAL 1: KESİNLİKLE ÖZEL MESAJLARI (DM) ENGELLE
-      // Mesaj bir grup mesajı değilse (@g.us ile bitmiyorsa) ANINDA ATLA
-      if (!remoteJid.endsWith('@g.us')) {
-        continue;
-      }
+      // 1. Kural: Sadece grupları dinle (Özel mesajları engelle)
+      if (!remoteJid.endsWith('@g.us')) continue;
 
-      // 🛑 KURAL 2: HEDEF GRUBUN KENDİSİNİ ENGELLE
-      if (hedefGrupJid && remoteJid === hedefGrupJid) {
-        continue;
-      }
+      // 2. Kural: Hedef grubun kendisinden gelen mesajları atla
+      if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
-      // 🛑 KURAL 3: SADECE BELİRLENEN KAYNAK GRUPLAR İŞLENSİN
-      // Eğer gelen grup dinlenen listede yoksa ATLA
-      if (!dinlenenGruplar.has(remoteJid)) {
-        continue;
-      }
+      // 3. Kural: Sadece yetkili kaynak grupları dinle
+      if (!dinlenenGruplar.has(remoteJid)) continue;
 
-      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, süreli vb.)
+      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, tek seferlik vb.)
       let m = msg.message;
       if (m.editedMessage?.message) m = m.editedMessage.message;
       if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
@@ -147,7 +153,10 @@ async function baslat() {
         m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
       }
 
+      // Medya türlerini tespit et
       const resimVar = Boolean(m.imageMessage);
+      const videoVar = Boolean(m.videoMessage);
+      const medyaVar = resimVar || videoVar;
       
       const metin = m.conversation || 
                     m.extendedTextMessage?.text || 
@@ -156,11 +165,11 @@ async function baslat() {
                     m.documentMessage?.caption ||
                     '';
 
-      if (!metin && !resimVar) continue;
+      if (!metin && !medyaVar) continue;
 
-      // Türkçe karakter sadeleştirme
-      const kucuk = metin
-        .toLocaleLowerCase('tr-TR')
+      // Hem orijinal Türkçe hem de sadeleştirilmiş arama metni
+      const orijinalMetin = metin.toLocaleLowerCase('tr-TR');
+      const sadelestirilmisMetin = orijinalMetin
         .replace(/ı/g, 'i')
         .replace(/ğ/g, 'g')
         .replace(/ü/g, 'u')
@@ -168,9 +177,25 @@ async function baslat() {
         .replace(/ö/g, 'o')
         .replace(/ç/g, 'c');
 
-      const eslesti = TEMEL_KOKLER.some(kok => kucuk.includes(kok));
+      const kelimeEslesti = TEMEL_KOKLER.some(kok => 
+        orijinalMetin.includes(kok) || sadelestirilmisMetin.includes(kok)
+      );
 
-      if (eslesti && hedefGrupJid) {
+      // Çoklu fotoğraf/video desteği (Kullanıcı bazlı takip anahtarı)
+      const gonderenId = msg.key.participant || msg.key.remoteJid;
+      const takipAnahtari = `${remoteJid}_${gonderenId}`;
+      const simdiZaman = Date.now();
+
+      let devamEdenOlay = aktifMedyaOlaylari.get(takipAnahtari);
+      if (devamEdenOlay && (simdiZaman - devamEdenOlay.zaman > 120000)) {
+        aktifMedyaOlaylari.delete(takipAnahtari);
+        devamEdenOlay = null;
+      }
+
+      // Bildirim tetiklenme koşulu: Ya yeni bir filtre eşleşmesi ya da önceki arızanın devam medyasının gelmesi
+      const bildirimGonderilmeli = kelimeEslesti || (medyaVar && devamEdenOlay);
+
+      if (bildirimGonderilmeli && hedefGrupJid) {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
         
@@ -187,11 +212,23 @@ async function baslat() {
           minute: '2-digit' 
         });
 
-        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n📅 *Tarih:* ${tarih}\n⏰ *Saat:* ${saat}\n📍 *Grup:* ${kaynakGrupAdi}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${metin || '(Resimli Bildirim)'}`;
+        // Eğer bu devam eden bir çoklu medya ise ve yeni açıklama yoksa önceki açıklamayı koru
+        const aciklamaMetni = metin || (devamEdenOlay ? `${devamEdenOlay.aciklama} (Ek Medya)` : '(Medya Bildirimi)');
+
+        // Bu arıza olayını sonraki 2 dakika boyunca atılacak diğer fotoğraflar/videolar için hafızada tut
+        if (kelimeEslesti) {
+          aktifMedyaOlaylari.set(takipAnahtari, {
+            zaman: simdiZaman,
+            aciklama: metin
+          });
+        }
+
+        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n📅 *Tarih:* ${tarih}\n⏰ *Saat:* ${saat}\n📍 *Grup:* ${kaynakGrupAdi}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${aciklamaMetni}`;
 
         try {
-          if (resimVar) {
-            console.log(`[MEDYA] Resimli bildirim iletiliyor -> ${kaynakGrupAdi}`);
+          if (medyaVar) {
+            console.log(`[MEDYA] ${videoVar ? 'Video' : 'Fotoğraf'} indiriliyor... (${kaynakGrupAdi})`);
+            
             const buffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
@@ -199,16 +236,25 @@ async function baslat() {
               { reuploadRequest: sock.updateMediaMessage }
             );
 
-            await sock.sendMessage(hedefGrupJid, {
-              image: buffer,
-              caption: bildirimMetni
-            });
+            if (resimVar) {
+              await sock.sendMessage(hedefGrupJid, {
+                image: buffer,
+                caption: bildirimMetni
+              });
+            } else if (videoVar) {
+              await sock.sendMessage(hedefGrupJid, {
+                video: buffer,
+                caption: bildirimMetni,
+                mimetype: m.videoMessage?.mimetype || 'video/mp4'
+              });
+            }
           } else {
             await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
           }
+
           console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen}`);
         } catch (sendErr) {
-          console.error('Mesaj veya resim iletilirken hata:', sendErr);
+          console.error('Mesaj veya medya iletilirken hata:', sendErr);
         }
       }
     }
