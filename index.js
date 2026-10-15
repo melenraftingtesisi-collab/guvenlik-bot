@@ -22,25 +22,16 @@ http.createServer((req, res) => {
   console.log(`Web portu dinleniyor: ${PORT}`);
 });
 
-// 2. KAPSAMLI FİLTRE LİSTESİ (Doğal Türkçe + Sadeleştirilmiş Halleri)
+// 2. KAPSAMLI FİLTRE LİSTESİ
 const TEMEL_KOKLER = [
-  // Arıza / Çalışma Durumu
   'arız', 'ariz', 'bozuk', 'bozul', 'çalışm', 'calism', 'açılmıy', 'acilmiy', 'kapanmıy', 'kapanmiy', 'tutmuy', 'tutmiy', 'devre dışı', 'devre disi', 'kesinti',
-
-  // Donanım, Cihaz ve Tesis Ekipmanları
   'bariyer', 'turnike', 'asansör', 'asansor', 'klima', 'jeneratör', 'jenerator', 'lamba', 'aydınlatm', 'aydinlatm', 'projektör', 'projektor',
   'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektör', 'detektor', 'telsiz', 'plaka tanı', 'plaka tani', 'manyetik',
   'kart okuyuc', 'buton', 'moba',
-
-  // Altyapı, Tesisat ve Sıhhi Sorunlar
   'elektrik', 'sigorta', 'kaçak', 'kacak', 'su basm', 'boru patla', 'vana', 'iski',
   'tıkan', 'tikan', 'taş', 'tas', 'akıt', 'akit', 'akıntı', 'akinti', 'damlat', 'sızıntı', 'sizinti',
-
-  // Fiziki Güvenlik, Hat ve Hasar
   'kırık', 'kirik', 'kırıl', 'kiril', 'hasar', 'çarpma', 'carpma', 'çarpt', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel çit', 'tel cit',
   'kop', 'koptu', 'kopma', 'devril', 'devrildi', 'devrilme', 'sark', 'sarktı', 'sarkma', 'yıkıl', 'yikil', 'yıkıldı',
-
-  // Acil Durum ve Yangın
   'yangın', 'yangin', 'duman', 'alarm çal', 'alarm cal', 'sabotaj'
 ];
 
@@ -76,8 +67,8 @@ async function baslat() {
   let hedefGrupJid = null;
   const dinlenenGruplar = new Map();
 
-  // Çoklu fotoğraf/video (albüm) takibi: Son bildirimi yapan kişiyi 120 sn boyunca aktif tutar
-  const aktifMedyaOlaylari = new Map();
+  // Çoklu fotoğraf/video toplama havuzu (Albüm birleştirici)
+  const medyaKuyrugu = new Map();
 
   async function gruplariGuncelle() {
     try {
@@ -122,6 +113,60 @@ async function baslat() {
     }
   });
 
+  // Toplanan albüm ve medya paketini hedefe ileten fonksiyon
+  async function medyaPaketiniGonder(anahtar) {
+    const paket = medyaKuyrugu.get(anahtar);
+    if (!paket || !hedefGrupJid) return;
+    medyaKuyrugu.delete(anahtar);
+
+    const { metin, gonderen, kaynakGrupAdi, medyalar } = paket;
+
+    const simdi = new Date();
+    const tarih = simdi.toLocaleDateString('tr-TR', {
+      timeZone: 'Europe/Istanbul',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+    const saat = simdi.toLocaleTimeString('tr-TR', { 
+      timeZone: 'Europe/Istanbul', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+
+    const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n📅 *Tarih:* ${tarih}\n⏰ *Saat:* ${saat}\n📍 *Grup:* ${kaynakGrupAdi}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${metin || '(Görsel Bildirim)'}`;
+
+    try {
+      if (medyalar.length === 0) {
+        // Sadece metin mesajı
+        await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
+      } else {
+        // Medyaları sırayla ilet: Sadece İLK medyaya açıklama başlığı koy, diğerlerini yalın gönder
+        for (let i = 0; i < medyalar.length; i++) {
+          const item = medyalar[i];
+          const aciklama = (i === 0) ? bildirimMetni : undefined;
+
+          if (item.tip === 'resim') {
+            await sock.sendMessage(hedefGrupJid, {
+              image: item.buffer,
+              caption: aciklama
+            });
+          } else if (item.tip === 'video') {
+            await sock.sendMessage(hedefGrupJid, {
+              video: item.buffer,
+              caption: aciklama,
+              mimetype: item.mimetype || 'video/mp4'
+            });
+          }
+          await delay(800); // WhatsApp paketlerinin sırasını koruması için kısa bekleme
+        }
+      }
+      console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen} (${medyalar.length} medya)`);
+    } catch (sendErr) {
+      console.error('Mesaj/medya gönderilirken hata:', sendErr);
+    }
+  }
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     
@@ -130,16 +175,16 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. Kural: Sadece grupları dinle (Özel mesajları engelle)
+      // 1. Kural: Özel mesajları engelle
       if (!remoteJid.endsWith('@g.us')) continue;
 
-      // 2. Kural: Hedef grubun kendisinden gelen mesajları atla
+      // 2. Kural: Hedef grubu engelle
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
 
-      // 3. Kural: Sadece yetkili kaynak grupları dinle
+      // 3. Kural: Yalnızca belirlenen kaynak grupları dinle
       if (!dinlenenGruplar.has(remoteJid)) continue;
 
-      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, tek seferlik vb.)
+      // Mesaj kabuklarını aç
       let m = msg.message;
       if (m.editedMessage?.message) m = m.editedMessage.message;
       if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
@@ -153,7 +198,6 @@ async function baslat() {
         m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
       }
 
-      // Medya türlerini tespit et
       const resimVar = Boolean(m.imageMessage);
       const videoVar = Boolean(m.videoMessage);
       const medyaVar = resimVar || videoVar;
@@ -167,7 +211,6 @@ async function baslat() {
 
       if (!metin && !medyaVar) continue;
 
-      // Hem orijinal Türkçe hem de sadeleştirilmiş arama metni
       const orijinalMetin = metin.toLocaleLowerCase('tr-TR');
       const sadelestirilmisMetin = orijinalMetin
         .replace(/ı/g, 'i')
@@ -181,80 +224,56 @@ async function baslat() {
         orijinalMetin.includes(kok) || sadelestirilmisMetin.includes(kok)
       );
 
-      // Çoklu fotoğraf/video desteği (Kullanıcı bazlı takip anahtarı)
       const gonderenId = msg.key.participant || msg.key.remoteJid;
       const takipAnahtari = `${remoteJid}_${gonderenId}`;
-      const simdiZaman = Date.now();
+      const kuyruktakiPaket = medyaKuyrugu.get(takipAnahtari);
 
-      let devamEdenOlay = aktifMedyaOlaylari.get(takipAnahtari);
-      if (devamEdenOlay && (simdiZaman - devamEdenOlay.zaman > 120000)) {
-        aktifMedyaOlaylari.delete(takipAnahtari);
-        devamEdenOlay = null;
-      }
-
-      // Bildirim tetiklenme koşulu: Ya yeni bir filtre eşleşmesi ya da önceki arızanın devam medyasının gelmesi
-      const bildirimGonderilmeli = kelimeEslesti || (medyaVar && devamEdenOlay);
-
-      if (bildirimGonderilmeli && hedefGrupJid) {
+      // Tetiklenme şartı: Ya kelime yakalandı ya da aynı kullanıcının devam eden medya paketi var
+      if (kelimeEslesti || kuyruktakiPaket) {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
-        
-        const simdi = new Date();
-        const tarih = simdi.toLocaleDateString('tr-TR', {
-          timeZone: 'Europe/Istanbul',
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        });
-        const saat = simdi.toLocaleTimeString('tr-TR', { 
-          timeZone: 'Europe/Istanbul', 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        });
 
-        // Eğer bu devam eden bir çoklu medya ise ve yeni açıklama yoksa önceki açıklamayı koru
-        const aciklamaMetni = metin || (devamEdenOlay ? `${devamEdenOlay.aciklama} (Ek Medya)` : '(Medya Bildirimi)');
-
-        // Bu arıza olayını sonraki 2 dakika boyunca atılacak diğer fotoğraflar/videolar için hafızada tut
-        if (kelimeEslesti) {
-          aktifMedyaOlaylari.set(takipAnahtari, {
-            zaman: simdiZaman,
-            aciklama: metin
-          });
-        }
-
-        const bildirimMetni = `⚠️ *[GÜVENLİK AKSAKLIK BİLDİRİMİ]*\n📅 *Tarih:* ${tarih}\n⏰ *Saat:* ${saat}\n📍 *Grup:* ${kaynakGrupAdi}\n👤 *Bildiren:* ${gonderen}\n💬 *Açıklama:* ${aciklamaMetni}`;
-
-        try {
-          if (medyaVar) {
-            console.log(`[MEDYA] ${videoVar ? 'Video' : 'Fotoğraf'} indiriliyor... (${kaynakGrupAdi})`);
-            
-            const buffer = await downloadMediaMessage(
+        let medyaBuffer = null;
+        if (medyaVar) {
+          try {
+            medyaBuffer = await downloadMediaMessage(
               { key: msg.key, message: m },
               'buffer',
               {},
               { reuploadRequest: sock.updateMediaMessage }
             );
-
-            if (resimVar) {
-              await sock.sendMessage(hedefGrupJid, {
-                image: buffer,
-                caption: bildirimMetni
-              });
-            } else if (videoVar) {
-              await sock.sendMessage(hedefGrupJid, {
-                video: buffer,
-                caption: bildirimMetni,
-                mimetype: m.videoMessage?.mimetype || 'video/mp4'
-              });
-            }
-          } else {
-            await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
+          } catch (e) {
+            console.error('Medya indirilemedi:', e);
           }
+        }
 
-          console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen}`);
-        } catch (sendErr) {
-          console.error('Mesaj veya medya iletilirken hata:', sendErr);
+        // Mevcut kuyruk yoksa oluştur, varsa güncelle
+        if (!kuyruktakiPaket) {
+          medyaKuyrugu.set(takipAnahtari, {
+            metin: metin,
+            gonderen: gonderen,
+            kaynakGrupAdi: kaynakGrupAdi,
+            medyalar: medyaBuffer ? [{
+              tip: resimVar ? 'resim' : 'video',
+              buffer: medyaBuffer,
+              mimetype: m.videoMessage?.mimetype
+            }] : [],
+            timer: setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000)
+          });
+        } else {
+          // Çoklu medyada sonraki resimler geldikçe süreyi tazele ve medyayı listeye ekle
+          clearTimeout(kuyruktakiPaket.timer);
+          if (metin && !kuyruktakiPaket.metin) {
+            kuyruktakiPaket.metin = metin;
+          }
+          if (medyaBuffer) {
+            kuyruktakiPaket.medyalar.push({
+              tip: resimVar ? 'resim' : 'video',
+              buffer: medyaBuffer,
+              mimetype: m.videoMessage?.mimetype
+            });
+          }
+          kuyruktakiPaket.timer = setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000);
         }
       }
     }
