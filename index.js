@@ -1,6 +1,17 @@
 import http from 'http';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, downloadMediaMessage } from '@whiskeysockets/baileys';
 
+// --- HATA KALKANI (Baileys içi 'Invalid buffer' ve bildirim hatalarının botu düşürmesini engeller) ---
+process.on('uncaughtException', (err) => {
+  if (err?.message?.includes('Invalid buffer')) return;
+  console.error('[Hata Yakalandı - Uncaught]:', err?.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  if (reason?.message?.includes('Invalid buffer')) return;
+  console.error('[Hata Yakalandı - Rejection]:', reason?.message || reason);
+});
+
 // --- AYARLAR ---
 const TELEFON_NUMARANIZ = '905468429287'; 
 
@@ -45,7 +56,9 @@ async function baslat() {
     defaultQueryTimeoutMs: undefined,
     connectTimeoutMs: 60000,
     syncFullHistory: false,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: false,
+    // Durum güncellemelerini ve kanalları baştan engelleyerek geçersiz buffer hatalarını önler
+    shouldIgnoreJid: (jid) => jid.includes('broadcast') || jid.includes('newsletter')
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -113,7 +126,6 @@ async function baslat() {
     }
   });
 
-  // Toplanan albüm ve medya paketini hedefe ileten fonksiyon
   async function medyaPaketiniGonder(anahtar) {
     const paket = medyaKuyrugu.get(anahtar);
     if (!paket || !hedefGrupJid) return;
@@ -138,10 +150,8 @@ async function baslat() {
 
     try {
       if (medyalar.length === 0) {
-        // Sadece metin mesajı
         await sock.sendMessage(hedefGrupJid, { text: bildirimMetni });
       } else {
-        // Medyaları sırayla ilet: Sadece İLK medyaya açıklama başlığı koy, diğerlerini yalın gönder
         for (let i = 0; i < medyalar.length; i++) {
           const item = medyalar[i];
           const aciklama = (i === 0) ? bildirimMetni : undefined;
@@ -158,7 +168,7 @@ async function baslat() {
               mimetype: item.mimetype || 'video/mp4'
             });
           }
-          await delay(800); // WhatsApp paketlerinin sırasını koruması için kısa bekleme
+          await delay(800);
         }
       }
       console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen} (${medyalar.length} medya)`);
@@ -175,16 +185,10 @@ async function baslat() {
 
       const remoteJid = msg.key.remoteJid || '';
 
-      // 1. Kural: Özel mesajları engelle
       if (!remoteJid.endsWith('@g.us')) continue;
-
-      // 2. Kural: Hedef grubu engelle
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
-
-      // 3. Kural: Yalnızca belirlenen kaynak grupları dinle
       if (!dinlenenGruplar.has(remoteJid)) continue;
 
-      // Mesaj kabuklarını aç
       let m = msg.message;
       if (m.editedMessage?.message) m = m.editedMessage.message;
       if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
@@ -228,7 +232,6 @@ async function baslat() {
       const takipAnahtari = `${remoteJid}_${gonderenId}`;
       const kuyruktakiPaket = medyaKuyrugu.get(takipAnahtari);
 
-      // Tetiklenme şartı: Ya kelime yakalandı ya da aynı kullanıcının devam eden medya paketi var
       if (kelimeEslesti || kuyruktakiPaket) {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
@@ -247,7 +250,6 @@ async function baslat() {
           }
         }
 
-        // Mevcut kuyruk yoksa oluştur, varsa güncelle
         if (!kuyruktakiPaket) {
           medyaKuyrugu.set(takipAnahtari, {
             metin: metin,
@@ -261,7 +263,6 @@ async function baslat() {
             timer: setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000)
           });
         } else {
-          // Çoklu medyada sonraki resimler geldikçe süreyi tazele ve medyayı listeye ekle
           clearTimeout(kuyruktakiPaket.timer);
           if (metin && !kuyruktakiPaket.metin) {
             kuyruktakiPaket.metin = metin;
