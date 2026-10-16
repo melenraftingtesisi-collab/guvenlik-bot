@@ -171,4 +171,145 @@ async function baslat() {
           const aciklama = (i === 0) ? bildirimMetni : undefined;
 
           if (item.tip === 'resim') {
-            await sock.sendMessage(hedef
+            await sock.sendMessage(hedefGrupJid, {
+              image: item.buffer,
+              caption: aciklama
+            });
+          } else if (item.tip === 'video') {
+            await sock.sendMessage(hedefGrupJid, {
+              video: item.buffer,
+              caption: aciklama,
+              mimetype: item.mimetype || 'video/mp4'
+            });
+          }
+          await delay(800);
+        }
+      }
+      console.log(`✅ Bildirim iletildi: [${kaynakGrupAdi}] ${gonderen} (${medyalar.length} medya)`);
+    } catch (sendErr) {
+      console.error('Mesaj/medya gönderilirken hata:', sendErr);
+    }
+  }
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    
+    for (const msg of messages) {
+      if (!msg.message || msg.key.fromMe) continue;
+
+      const remoteJid = msg.key.remoteJid || '';
+
+      if (!remoteJid.endsWith('@g.us')) continue;
+      if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
+      if (!dinlenenGruplar.has(remoteJid)) continue;
+
+      let m = msg.message;
+      if (m.editedMessage?.message) m = m.editedMessage.message;
+      if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
+
+      while (
+        m.ephemeralMessage ||
+        m.viewOnceMessage ||
+        m.viewOnceMessageV2 ||
+        m.documentWithCaptionMessage
+      ) {
+        m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
+      }
+
+      const resimVar = Boolean(m.imageMessage);
+      const videoVar = Boolean(m.videoMessage);
+      const medyaVar = resimVar || videoVar;
+      
+      const metin = m.conversation || 
+                    m.extendedTextMessage?.text || 
+                    m.imageMessage?.caption || 
+                    m.videoMessage?.caption || 
+                    m.documentMessage?.caption ||
+                    '';
+
+      if (!metin && !medyaVar) continue;
+
+      const orijinalMetin = metin.toLocaleLowerCase('tr-TR');
+      const sadelestirilmisMetin = orijinalMetin
+        .replace(/ı/g, 'i')
+        .replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u')
+        .replace(/ş/g, 's')
+        .replace(/ö/g, 'o')
+        .replace(/ç/g, 'c');
+
+      // Rutin nöbet defteri, taşeron ve ziyaretçi giriş-çıkış kayıtlarını ele (İçinde açık bir hasar/arıza/kırık yoksa)
+      const girisCikisKaydiMi = (
+        orijinalMetin.includes('giriş') || orijinalMetin.includes('giris') || 
+        orijinalMetin.includes('çıkış') || orijinalMetin.includes('cikis')
+      ) && (
+        !orijinalMetin.includes('kırık') && 
+        !orijinalMetin.includes('kirik') && 
+        !orijinalMetin.includes('hasar') && 
+        !orijinalMetin.includes('arız') && 
+        !orijinalMetin.includes('ariz') && 
+        !orijinalMetin.includes('kaza') &&
+        !orijinalMetin.includes('çalışm') &&
+        !orijinalMetin.includes('calism')
+      );
+
+      if (girisCikisKaydiMi) continue;
+
+      const kelimeEslesti = TEMEL_KOKLER.some(kok => 
+        orijinalMetin.includes(kok) || sadelestirilmisMetin.includes(kok)
+      );
+
+      const gonderenId = msg.key.participant || msg.key.remoteJid;
+      const takipAnahtari = `${remoteJid}_${gonderenId}`;
+      const kuyruktakiPaket = medyaKuyrugu.get(takipAnahtari);
+
+      if (kelimeEslesti || kuyruktakiPaket) {
+        const gonderen = msg.pushName || 'Görevli';
+        const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
+
+        let medyaBuffer = null;
+        if (medyaVar) {
+          try {
+            medyaBuffer = await downloadMediaMessage(
+              { key: msg.key, message: m },
+              'buffer',
+              {},
+              { reuploadRequest: sock.updateMediaMessage }
+            );
+          } catch (e) {
+            console.error('Medya indirilemedi:', e);
+          }
+        }
+
+        if (!kuyruktakiPaket) {
+          medyaKuyrugu.set(takipAnahtari, {
+            metin: metin,
+            gonderen: gonderen,
+            kaynakGrupAdi: kaynakGrupAdi,
+            medyalar: medyaBuffer ? [{
+              tip: resimVar ? 'resim' : 'video',
+              buffer: medyaBuffer,
+              mimetype: m.videoMessage?.mimetype
+            }] : [],
+            timer: setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000)
+          });
+        } else {
+          clearTimeout(kuyruktakiPaket.timer);
+          if (metin && !kuyruktakiPaket.metin) {
+            kuyruktakiPaket.metin = metin;
+          }
+          if (medyaBuffer) {
+            kuyruktakiPaket.medyalar.push({
+              tip: resimVar ? 'resim' : 'video',
+              buffer: medyaBuffer,
+              mimetype: m.videoMessage?.mimetype
+            });
+          }
+          kuyruktakiPaket.timer = setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000);
+        }
+      }
+    }
+  });
+}
+
+baslat();
