@@ -1,7 +1,7 @@
 import http from 'http';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, delay, downloadMediaMessage } from '@whiskeysockets/baileys';
 
-// --- HATA KALKANI (Baileys içi 'Invalid buffer' ve bildirim hatalarının botu düşürmesini engeller) ---
+// --- HATA KALKANI ---
 process.on('uncaughtException', (err) => {
   if (err?.message?.includes('Invalid buffer')) return;
   console.error('[Hata Yakalandı - Uncaught]:', err?.message || err);
@@ -18,13 +18,14 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// SADECE DİNLENECEK KAYNAK GRUPLAR (Tam grup adları)
+// Dinlenecek gruplar (Kıymet grubunu da garanti olsun diye ekli tutuyoruz)
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
-  "AYEDAŞ GM GÜVENLİK"
+  "AYEDAŞ GM GÜVENLİK",
+  "Ayedaş Kıymet"
 ];
 
-// 1. Port Dinleyici (Render Web Service kapanmasın diye)
+// 1. Port Dinleyici
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -37,13 +38,14 @@ http.createServer((req, res) => {
 const TEMEL_KOKLER = [
   // Arıza / Çalışma Durumu
   'arız', 'ariz', 'bozuk', 'bozul', 'çalışm', 'calism', 'açılmıy', 'acilmiy', 'kapanmıy', 'kapanmiy', 'tutmuy', 'tutmiy', 'devre dışı', 'devre disi', 'kesinti',
+  'alınamıy', 'alinamiy', 'alınmamak', 'alinmamak', 'görüntü', 'goruntu',
 
   // Donanım, Cihaz ve Tesis Ekipmanları
   'bariyer', 'turnike', 'asansör', 'asansor', 'klima', 'jeneratör', 'jenerator', 'lamba', 'aydınlatm', 'aydinlatm', 'projektör', 'projektor',
   'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektör', 'detektor', 'telsiz', 'plaka tanı', 'plaka tani', 'manyetik',
   'kart okuyuc', 'buton', 'moba',
 
-  // Altyapı, Tesisat ve Sıhhi Sorunlar (Yalın 'elektrik' ve 'taş'/'tas' kaldırıldı)
+  // Altyapı, Tesisat ve Sıhhi Sorunlar
   'elektrik kesint', 'elektrik yok', 'elektrik gitti', 'elektrik arız', 'elektrik ariz',
   'sigorta', 'kaçak', 'kacak', 'su basm', 'boru patla', 'vana', 'iski',
   'tıkan', 'tikan',
@@ -56,6 +58,7 @@ const TEMEL_KOKLER = [
   'devril', 'devrildi', 'devrilme',
   'sarktı', 'sarkma', 'sarkıyor',
   'yıkıl', 'yikil', 'yıkıldı',
+  'yerinden çık', 'yerinden cik', 'tutacak', 'tutacag', 'cam tut',
 
   // Acil Durum ve Yangın
   'yangın', 'yangin', 'duman', 'alarm çal', 'alarm cal', 'sabotaj'
@@ -93,8 +96,6 @@ async function baslat() {
 
   let hedefGrupJid = null;
   const dinlenenGruplar = new Map();
-
-  // Çoklu fotoğraf/video toplama havuzu (Albüm birleştirici)
   const medyaKuyrugu = new Map();
 
   async function gruplariGuncelle() {
@@ -203,6 +204,7 @@ async function baslat() {
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
       if (!dinlenenGruplar.has(remoteJid)) continue;
 
+      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, tek seferlik vb.)
       let m = msg.message;
       if (m.editedMessage?.message) m = m.editedMessage.message;
       if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
@@ -214,6 +216,7 @@ async function baslat() {
         m.documentWithCaptionMessage
       ) {
         m = (m.ephemeralMessage || m.viewOnceMessage || m.viewOnceMessageV2 || m.documentWithCaptionMessage).message;
+        if (m.editedMessage?.message) m = m.editedMessage.message;
       }
 
       const resimVar = Boolean(m.imageMessage);
@@ -238,10 +241,12 @@ async function baslat() {
         .replace(/ö/g, 'o')
         .replace(/ç/g, 'c');
 
-      // Rutin nöbet defteri, taşeron ve ziyaretçi giriş-çıkış kayıtlarını ele (İçinde açık bir hasar/arıza/kırık yoksa)
-      const girisCikisKaydiMi = (
-        orijinalMetin.includes('giriş') || orijinalMetin.includes('giris') || 
-        orijinalMetin.includes('çıkış') || orijinalMetin.includes('cikis')
+      // Rutin kapı giriş-çıkış loglarını ele (hasar, arıza ve yerinden çıkma durumlarını ASLA elemez)
+      const kapiGirisCikisMi = (
+        orijinalMetin.includes('yaya giriş') || orijinalMetin.includes('yaya giris') ||
+        orijinalMetin.includes('araç giriş') || orijinalMetin.includes('arac giris') ||
+        orijinalMetin.includes('çıkış yapmıştır') || orijinalMetin.includes('cikis yapmistir') ||
+        (orijinalMetin.endsWith('giriş') || orijinalMetin.endsWith('giris'))
       ) && (
         !orijinalMetin.includes('kırık') && 
         !orijinalMetin.includes('kirik') && 
@@ -250,10 +255,12 @@ async function baslat() {
         !orijinalMetin.includes('ariz') && 
         !orijinalMetin.includes('kaza') &&
         !orijinalMetin.includes('çalışm') &&
-        !orijinalMetin.includes('calism')
+        !orijinalMetin.includes('calism') &&
+        !orijinalMetin.includes('yerinden çık') &&
+        !orijinalMetin.includes('yerinden cik')
       );
 
-      if (girisCikisKaydiMi) continue;
+      if (kapiGirisCikisMi) continue;
 
       const kelimeEslesti = TEMEL_KOKLER.some(kok => 
         orijinalMetin.includes(kok) || sadelestirilmisMetin.includes(kok)
