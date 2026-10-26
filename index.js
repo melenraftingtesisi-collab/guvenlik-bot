@@ -22,8 +22,7 @@ const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
   "AYEDAŞ GM GÜVENLİK",
-  "Ayedaş Kıymet"
-];
+  ];
 
 // 1. Port Dinleyici
 const PORT = process.env.PORT || 3000;
