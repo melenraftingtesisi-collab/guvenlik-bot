@@ -18,7 +18,7 @@ const TELEFON_NUMARANIZ = '905468429287';
 // Hedef yönetim grubunun tam adı
 const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 
-// Dinlenecek gruplar (Kıymet grubunu da garanti olsun diye ekli tutuyoruz)
+// SADECE DİNLENECEK KAYNAK GRUPLAR
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
   "AYEDAŞ GM GÜVENLİK",
@@ -38,12 +38,12 @@ http.createServer((req, res) => {
 const TEMEL_KOKLER = [
   // Arıza / Çalışma Durumu
   'arız', 'ariz', 'bozuk', 'bozul', 'çalışm', 'calism', 'açılmıy', 'acilmiy', 'kapanmıy', 'kapanmiy', 'tutmuy', 'tutmiy', 'devre dışı', 'devre disi', 'kesinti',
-  'alınamıy', 'alinamiy', 'alınmamak', 'alinmamak', 'görüntü', 'goruntu',
+  'alınamıy', 'alinamiy', 'alınmamak', 'alinmamak', 'görüntü', 'goruntu', 'tutanak',
 
-  // Donanım, Cihaz ve Tesis Ekipmanları
+  // Donanım, Cihaz ve Isıtma/Soğutma Ekipmanları
   'bariyer', 'turnike', 'asansör', 'asansor', 'klima', 'jeneratör', 'jenerator', 'lamba', 'aydınlatm', 'aydinlatm', 'projektör', 'projektor',
   'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektör', 'detektor', 'telsiz', 'plaka tanı', 'plaka tani', 'manyetik',
-  'kart okuyuc', 'buton', 'moba',
+  'kart okuyuc', 'buton', 'moba', 'telefon', 'santral', 'kalorifer', 'ısıtma', 'isitma', 'kazan',
 
   // Altyapı, Tesisat ve Sıhhi Sorunlar
   'elektrik kesint', 'elektrik yok', 'elektrik gitti', 'elektrik arız', 'elektrik ariz',
@@ -73,8 +73,9 @@ async function baslat() {
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
     defaultQueryTimeoutMs: undefined,
     connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000,
     syncFullHistory: false,
-    markOnlineOnConnect: false,
+    markOnlineOnConnect: true,
     shouldIgnoreJid: (jid) => jid.includes('broadcast') || jid.includes('newsletter')
   });
 
@@ -97,6 +98,9 @@ async function baslat() {
   let hedefGrupJid = null;
   const dinlenenGruplar = new Map();
   const medyaKuyrugu = new Map();
+  
+  // Önce fotoğraf atıp ardından açıklama yazan personeller için 2 dakikalık geriye dönük medya tamponu
+  const sonGelenMedyalar = new Map();
 
   async function gruplariGuncelle() {
     try {
@@ -230,6 +234,37 @@ async function baslat() {
                     m.documentMessage?.caption ||
                     '';
 
+      const gonderenId = msg.key.participant || msg.key.remoteJid;
+      const takipAnahtari = `${remoteJid}_${gonderenId}`;
+
+      // Medya geldiyse hemen indir ve geçici havuzda 2 dakika boyunca sakla
+      let indirilenBuffer = null;
+      if (medyaVar) {
+        try {
+          indirilenBuffer = await downloadMediaMessage(
+            { key: msg.key, message: m },
+            'buffer',
+            {},
+            { reuploadRequest: sock.updateMediaMessage }
+          );
+        } catch (e) {
+          console.error('Medya indirme hatası:', e);
+        }
+
+        if (indirilenBuffer) {
+          const eskiHavuz = sonGelenMedyalar.get(takipAnahtari) || [];
+          eskiHavuz.push({
+            tip: resimVar ? 'resim' : 'video',
+            buffer: indirilenBuffer,
+            mimetype: m.videoMessage?.mimetype,
+            zaman: Date.now()
+          });
+          // 2 dakikadan eski medyaları temizle
+          const guncelHavuz = eskiHavuz.filter(item => Date.now() - item.zaman < 120000);
+          sonGelenMedyalar.set(takipAnahtari, guncelHavuz);
+        }
+      }
+
       if (!metin && !medyaVar) continue;
 
       const orijinalMetin = metin.toLocaleLowerCase('tr-TR');
@@ -241,7 +276,7 @@ async function baslat() {
         .replace(/ö/g, 'o')
         .replace(/ç/g, 'c');
 
-      // Rutin kapı giriş-çıkış loglarını ele (hasar, arıza ve yerinden çıkma durumlarını ASLA elemez)
+      // Rutin nöbet/kapı giriş-çıkışlarını ele
       const kapiGirisCikisMi = (
         orijinalMetin.includes('yaya giriş') || orijinalMetin.includes('yaya giris') ||
         orijinalMetin.includes('araç giriş') || orijinalMetin.includes('arac giris') ||
@@ -266,38 +301,32 @@ async function baslat() {
         orijinalMetin.includes(kok) || sadelestirilmisMetin.includes(kok)
       );
 
-      const gonderenId = msg.key.participant || msg.key.remoteJid;
-      const takipAnahtari = `${remoteJid}_${gonderenId}`;
       const kuyruktakiPaket = medyaKuyrugu.get(takipAnahtari);
 
       if (kelimeEslesti || kuyruktakiPaket) {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
 
-        let medyaBuffer = null;
-        if (medyaVar) {
-          try {
-            medyaBuffer = await downloadMediaMessage(
-              { key: msg.key, message: m },
-              'buffer',
-              {},
-              { reuploadRequest: sock.updateMediaMessage }
-            );
-          } catch (e) {
-            console.error('Medya indirilemedi:', e);
-          }
-        }
+        // Personelin son 2 dakika içinde attığı metinsiz medyaları al
+        const gecmisMedyalar = sonGelenMedyalar.get(takipAnahtari) || [];
 
         if (!kuyruktakiPaket) {
+          const gonderilecekMedyalar = [...gecmisMedyalar];
+          if (indirilenBuffer && !gonderilecekMedyalar.some(m => m.buffer === indirilenBuffer)) {
+            gonderilecekMedyalar.push({
+              tip: resimVar ? 'resim' : 'video',
+              buffer: indirilenBuffer,
+              mimetype: m.videoMessage?.mimetype
+            });
+          }
+          // Havuz aktarıldığı için temizle
+          sonGelenMedyalar.delete(takipAnahtari);
+
           medyaKuyrugu.set(takipAnahtari, {
             metin: metin,
             gonderen: gonderen,
             kaynakGrupAdi: kaynakGrupAdi,
-            medyalar: medyaBuffer ? [{
-              tip: resimVar ? 'resim' : 'video',
-              buffer: medyaBuffer,
-              mimetype: m.videoMessage?.mimetype
-            }] : [],
+            medyalar: gonderilecekMedyalar,
             timer: setTimeout(() => medyaPaketiniGonder(takipAnahtari), 3000)
           });
         } else {
@@ -305,10 +334,10 @@ async function baslat() {
           if (metin && !kuyruktakiPaket.metin) {
             kuyruktakiPaket.metin = metin;
           }
-          if (medyaBuffer) {
+          if (indirilenBuffer) {
             kuyruktakiPaket.medyalar.push({
               tip: resimVar ? 'resim' : 'video',
-              buffer: medyaBuffer,
+              buffer: indirilenBuffer,
               mimetype: m.videoMessage?.mimetype
             });
           }
