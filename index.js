@@ -49,7 +49,9 @@ const TEMEL_KOKLER = [
   'sigorta', 'kaçak', 'kacak', 'su basm', 'boru patla', 'vana', 'iski',
   'tıkan', 'tikan',
   'taşma', 'tasma', 'taştı', 'tasti', 'taşıyor', 'tasiyor', 'su taş', 'su tas',
-  'akıt', 'akit', 'akıntı', 'akinti', 'damlat', 'sızıntı', 'sizinti',
+  'su ak', 'akıt', 'akit', 'akıntı', 'akinti', 
+  'damla', 'damlat', // 'damla' eklendi: damlaması, damlıyor, damlama hepsini yakalar
+  'sızıntı', 'sizinti', 'onarım', 'onarim',
 
   // Fiziki Güvenlik, Hat ve Hasar
   'kırık', 'kirik', 'kırıl', 'kiril', 'hasar', 'çarpma', 'carpma', 'çarpt', 'carpt', 'zorlanm', 'delinm', 'kesilm', 'tel çit', 'tel cit',
