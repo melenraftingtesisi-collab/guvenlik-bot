@@ -21,10 +21,10 @@ const HEDEF_GRUP_ADI = "Güvenlik Bildirim Takip";
 // SADECE DİNLENECEK KAYNAK GRUPLAR
 const KAYNAK_GRUPLAR = [
   "AYEDAŞ BÖLGE GÜVENLİK",
-  "AYEDAŞ GM GÜVENLİK",
-  ];
+  "AYEDAŞ GM GÜVENLİK"
+];
 
-// 1. Port Dinleyici
+// 1. Port Dinleyici (Render Web Service kapanmasın diye)
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -44,13 +44,13 @@ const TEMEL_KOKLER = [
   'kamera', 'dvr', 'nvr', 'xray', 'x-ray', 'detektör', 'detektor', 'telsiz', 'plaka tanı', 'plaka tani', 'manyetik',
   'kart okuyuc', 'buton', 'moba', 'telefon', 'santral', 'kalorifer', 'ısıtma', 'isitma', 'kazan',
 
-  // Altyapı, Tesisat ve Sıhhi Sorunlar
+  // Altyapı, Tesisat ve Sıhhi Sorunlar (damla, onarım ve su ak eklendi)
   'elektrik kesint', 'elektrik yok', 'elektrik gitti', 'elektrik arız', 'elektrik ariz',
   'sigorta', 'kaçak', 'kacak', 'su basm', 'boru patla', 'vana', 'iski',
   'tıkan', 'tikan',
   'taşma', 'tasma', 'taştı', 'tasti', 'taşıyor', 'tasiyor', 'su taş', 'su tas',
-  'su ak', 'akıt', 'akit', 'akıntı', 'akinti', 
-  'damla', 'damlat', // 'damla' eklendi: damlaması, damlıyor, damlama hepsini yakalar
+  'su ak', 'akıt', 'akit', 'akıntı', 'akinti',
+  'damla', 'damlat', // damlaması, damlıyor, damlatmaktadır hepsini yakalar
   'sızıntı', 'sizinti', 'onarım', 'onarim',
 
   // Fiziki Güvenlik, Hat ve Hasar
@@ -65,21 +65,27 @@ const TEMEL_KOKLER = [
   'yangın', 'yangin', 'duman', 'alarm çal', 'alarm cal', 'sabotaj'
 ];
 
+let globalSock = null;
+let keepAliveTimer = null;
+
 async function baslat() {
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
+
   const { state, saveCreds } = await useMultiFileAuthState('auth_session');
 
   const sock = makeWASocket({
     auth: state,
     printQRInTerminal: false,
     browser: ['Ubuntu', 'Chrome', '20.0.04'],
-    defaultQueryTimeoutMs: undefined,
+    defaultQueryTimeoutMs: 60000,
     connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 30000,
+    keepAliveIntervalMs: 25000,
     syncFullHistory: false,
     markOnlineOnConnect: true,
     shouldIgnoreJid: (jid) => jid.includes('broadcast') || jid.includes('newsletter')
   });
 
+  globalSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
   if (!sock.authState.creds.registered) {
@@ -99,8 +105,6 @@ async function baslat() {
   let hedefGrupJid = null;
   const dinlenenGruplar = new Map();
   const medyaKuyrugu = new Map();
-  
-  // Önce fotoğraf atıp ardından açıklama yazan personeller için 2 dakikalık geriye dönük medya tamponu
   const sonGelenMedyalar = new Map();
 
   async function gruplariGuncelle() {
@@ -134,9 +138,19 @@ async function baslat() {
       console.log('✅ WhatsApp Bağlantısı Başarılı!');
       await delay(3000);
       await gruplariGuncelle();
+
+      // WhatsApp Web gibi sürekli "Çevrim içi" (Available) kalmasını sağlayan döngü
+      keepAliveTimer = setInterval(async () => {
+        try {
+          await sock.sendPresenceUpdate('available');
+        } catch (e) {
+          console.log('[Uyarı] Varlık sinyali iletilemedi, bağlantı tazeleniyor...');
+        }
+      }, 50000);
     }
 
     if (connection === 'close') {
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
       const statusCode = (lastDisconnect?.error)?.output?.statusCode;
       const yenidenBaglan = statusCode !== DisconnectReason.loggedOut;
       console.log(`Bağlantı koptu (Kod: ${statusCode}). Yeniden başlatılıyor...`);
@@ -209,7 +223,6 @@ async function baslat() {
       if (hedefGrupJid && remoteJid === hedefGrupJid) continue;
       if (!dinlenenGruplar.has(remoteJid)) continue;
 
-      // Mesaj kabuklarını aç (düzenlenmiş, iletilmiş, tek seferlik vb.)
       let m = msg.message;
       if (m.editedMessage?.message) m = m.editedMessage.message;
       if (m.protocolMessage?.editedMessage) m = m.protocolMessage.editedMessage;
@@ -238,7 +251,6 @@ async function baslat() {
       const gonderenId = msg.key.participant || msg.key.remoteJid;
       const takipAnahtari = `${remoteJid}_${gonderenId}`;
 
-      // Medya geldiyse hemen indir ve geçici havuzda 2 dakika boyunca sakla
       let indirilenBuffer = null;
       if (medyaVar) {
         try {
@@ -260,7 +272,6 @@ async function baslat() {
             mimetype: m.videoMessage?.mimetype,
             zaman: Date.now()
           });
-          // 2 dakikadan eski medyaları temizle
           const guncelHavuz = eskiHavuz.filter(item => Date.now() - item.zaman < 120000);
           sonGelenMedyalar.set(takipAnahtari, guncelHavuz);
         }
@@ -277,7 +288,6 @@ async function baslat() {
         .replace(/ö/g, 'o')
         .replace(/ç/g, 'c');
 
-      // Rutin nöbet/kapı giriş-çıkışlarını ele
       const kapiGirisCikisMi = (
         orijinalMetin.includes('yaya giriş') || orijinalMetin.includes('yaya giris') ||
         orijinalMetin.includes('araç giriş') || orijinalMetin.includes('arac giris') ||
@@ -308,7 +318,6 @@ async function baslat() {
         const gonderen = msg.pushName || 'Görevli';
         const kaynakGrupAdi = dinlenenGruplar.get(remoteJid) || 'Bölge Grubu';
 
-        // Personelin son 2 dakika içinde attığı metinsiz medyaları al
         const gecmisMedyalar = sonGelenMedyalar.get(takipAnahtari) || [];
 
         if (!kuyruktakiPaket) {
@@ -320,7 +329,6 @@ async function baslat() {
               mimetype: m.videoMessage?.mimetype
             });
           }
-          // Havuz aktarıldığı için temizle
           sonGelenMedyalar.delete(takipAnahtari);
 
           medyaKuyrugu.set(takipAnahtari, {
